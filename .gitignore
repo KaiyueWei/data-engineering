@@ -4,3 +4,7 @@
 _pycache_/
 *.py[codz]
 *$py.class
+
+
+#data
+./ny_taxi_postgres_data
