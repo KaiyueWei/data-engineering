@@ -8,3 +8,12 @@ _pycache_/
 
 #data
 /ny_taxi_postgres_data/
+
+
+##airflow
+/airflowdemo/logs
+/airflow/.env
+
+
+##terraform
+/terraformdemo/.*
