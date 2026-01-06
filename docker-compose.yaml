@@ -1,7 +1,20 @@
+version: "3.8"
+
+networks:
+  data-platform:
+    name: data-platform
+
+volumes:
+  ny_taxi_postgres_data:
+  airflow_db:
+  pgadmin_data:
+
 services:
+  # =========================
+  # DATA POSTGRES (NY TAXI)
+  # =========================
   pgdatabase:
     image: postgres:18
-    container_name: pgdatabase
     environment:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: root
@@ -9,18 +22,16 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ny_taxi_postgres_data:/var/lib/postgresql
+      - ny_taxi_postgres_data:/var/lib/postgresql/
     networks:
-      - pg-network
+      - data-platform
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U root -d ny_taxi"]
       interval: 5s
-      timeout: 5s
-      retries: 10
+      retries: 5
 
   pgadmin:
     image: dpage/pgadmin4
-    container_name: pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: root
@@ -28,35 +39,86 @@ services:
       - "8085:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
-    networks:
-      - pg-network
-    depends_on:
-      pgdatabase:
-        condition: service_healthy
-
-  ingest:
-    image: taxi_ingest:v001
     depends_on:
       pgdatabase:
         condition: service_healthy
     networks:
-      - pg-network
-    command:
-      - --pg-user=root
-      - --pg-pass=root
-      - --pg-host=pgdatabase
-      - --pg-port=5432
-      - --pg-db=ny_taxi
-      - --target-table=yellow_taxi_trips_2021_2
-      - --year=2021
-      - --month=2
-      - --chunksize=100000
-    profiles: ["ingest"]
+      - data-platform
 
-networks:
-  pg-network:
-    name: pg-network
+  # =========================
+  # AIRFLOW METADATA DB
+  # =========================
+  airflow-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db:/var/lib/postgresql/
+    networks:
+      - data-platform
 
-volumes:
-  ny_taxi_postgres_data:
-  pgadmin_data:
+  # =========================
+  # AIRFLOW INIT
+  # =========================
+  airflow-init:
+    build: .
+    entrypoint: /bin/bash
+    command: >
+      -c "
+      airflow db migrate &&
+      airflow users create
+        --username airflow
+        --password airflow
+        --firstname Airflow
+        --lastname Admin
+        --role Admin
+        --email admin@airflow.com
+      "
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    depends_on:
+      - airflow-postgres
+    networks:
+      - data-platform
+
+  # =========================
+  # AIRFLOW WEBSERVER
+  # =========================
+  airflow-webserver:
+    build: .
+    command: webserver
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      - airflow-postgres
+    networks:
+      - data-platform
+
+  # =========================
+  # AIRFLOW SCHEDULER
+  # =========================
+  airflow-scheduler:
+    build: .
+    command: scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      - airflow-postgres
+    networks:
+      - data-platform

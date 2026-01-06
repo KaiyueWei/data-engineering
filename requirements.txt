@@ -1,0 +1,7 @@
+## airflow provider for postgres
+apache-airflow-providers-postgres
+## data processing
+pandas
+pyarrow
+# Postgres driver
+psycopg2-binary
