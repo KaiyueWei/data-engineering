@@ -58,41 +58,50 @@ services:
       - airflow_db:/var/lib/postgresql/
     networks:
       - data-platform
+    # ### FIX 1: Add Healthcheck so airflow-init knows when DB is ready
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      retries: 5
 
-  # =========================
+# =========================
   # AIRFLOW INIT
   # =========================
   airflow-init:
     build: .
-    entrypoint: /bin/bash
-    command: >
-      -c "
-      airflow db migrate &&
-      airflow users create
-        --username airflow
-        --password airflow
-        --firstname Airflow
-        --lastname Admin
-        --role Admin
-        --email admin@airflow.com
-      "
+    user: "${AIRFLOW_UID:-50000}:0"
     environment:
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      # Airflow 3.x: let the image entrypoint run db migrations + create the UI user.
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+    command: version
     depends_on:
-      - airflow-postgres
+      airflow-postgres:
+        condition: service_healthy
     networks:
       - data-platform
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
 
   # =========================
   # AIRFLOW WEBSERVER
   # =========================
   airflow-webserver:
     build: .
-    command: webserver
+    user: "${AIRFLOW_UID:-50000}:0" # ### FIX 2
+    # Airflow 3.x uses the API server instead of the old `webserver` process.
+    command: api-server
     ports:
       - "8080:8080"
     environment:
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
@@ -101,7 +110,11 @@ services:
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
     depends_on:
-      - airflow-postgres
+      airflow-postgres:
+        condition: service_healthy
+      # ### FIX 4: Wait for init to finish completely
+      airflow-init:
+        condition: service_completed_successfully
     networks:
       - data-platform
 
@@ -110,8 +123,10 @@ services:
   # =========================
   airflow-scheduler:
     build: .
+    user: "${AIRFLOW_UID:-50000}:0" # ### FIX 2
     command: scheduler
     environment:
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
     volumes:
@@ -119,6 +134,10 @@ services:
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
     depends_on:
-      - airflow-postgres
+      airflow-postgres:
+        condition: service_healthy
+      # ### FIX 4: Wait for init to finish completely
+      airflow-init:
+        condition: service_completed_successfully
     networks:
       - data-platform
